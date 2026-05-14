@@ -18,7 +18,7 @@ load_dotenv()
 INDEX_FILE = "faiss.index"
 MAP_FILE   = "index_map.pkl"
 HF_TOKEN   = os.getenv("HF_TOKEN", "")
-HF_API_URL = "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
+HF_API_URL = HF_API_URL = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
 
 _index = None
 _items = None

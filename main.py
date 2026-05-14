@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 import os
 
-from retriever import search, build_query_from_history, _load as load_retriever
+from retriever import search, build_query_from_history, _load as load_retriever, get_always_include_items
 from agent import get_reply
 
 
@@ -104,13 +104,43 @@ def chat(request: ChatRequest):
             detail="Conversation exceeds maximum of 8 turns.",
         )
 
-    # Step 1: Build search query from all user messages in history
+    # Step 1: Build enriched search query from full conversation history
     query = build_query_from_history(messages)
 
-    # Step 2: Retrieve top-15 relevant catalog items via FAISS
-    catalog_items = search(query, top_k=15)
+    # Step 2: Hybrid search — semantic + keyword, top 20 candidates
+    catalog_items = search(query, top_k=20)
 
-    # Step 3: Single LLM call — classify + respond + recommend
+    # Step 3: Always append OPQ32r and Verify G+ so agent can include them
+    always = get_always_include_items()
+    existing_urls = {item["url"] for item in catalog_items}
+    for item in always:
+        if item["url"] not in existing_urls:
+            catalog_items.append(item)
+
+    # Step 4: Pre-filter/boost by job level if mentioned
+    all_user_text = " ".join(m["content"] for m in messages).lower()
+    level_map = {
+        "entry": "Entry-Level",
+        "graduate": "Graduate",
+        "mid": "Mid-Professional",
+        "senior": "Professional Individual Contributor",
+        "manager": "Manager",
+        "director": "Director",
+        "executive": "Executive",
+        "cxo": "Executive",
+        "leadership": "Director",
+    }
+    matched_level = None
+    for keyword, level in level_map.items():
+        if keyword in all_user_text:
+            matched_level = level
+            break
+    if matched_level:
+        matching = [i for i in catalog_items if matched_level in i.get("job_levels", [])]
+        others = [i for i in catalog_items if matched_level not in i.get("job_levels", [])]
+        catalog_items = (matching + others)[:22]
+
+    # Step 5: Single LLM call — classify + respond + recommend
     result = get_reply(messages, catalog_items)
 
     return ChatResponse(**result)

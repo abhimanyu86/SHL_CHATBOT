@@ -17,7 +17,6 @@ load_dotenv()
 _client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 MODEL = "llama-3.3-70b-versatile"
 
-
 SYSTEM_PROMPT = """You are an SHL assessment expert helping hiring managers and recruiters \
 select the right assessments from the SHL Individual Test Solutions catalog.
 

@@ -1,7 +1,7 @@
 import requests
 import time
 
-BASE = "https://shl-chatbot-31g9.onrender.com"
+BASE = "http://localhost:8000"
 history = []
 turn_count = 0
 MAX_TURNS = 7

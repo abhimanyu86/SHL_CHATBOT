@@ -15,7 +15,13 @@ from contextlib import asynccontextmanager
 import uvicorn
 import os
 
-from retriever import search, build_query_from_history, _load as load_retriever
+import os
+# Use lightweight HF API retriever on Render (no 800MB torch at runtime)
+# Use local sentence-transformers retriever locally
+if os.getenv("RENDER"):
+    from retriever_render import search, build_query_from_history, _load_for_health as load_retriever, get_always_include_items
+else:
+    from retriever import search, build_query_from_history, _load as load_retriever, get_always_include_items
 from agent import get_reply
 
 

@@ -43,22 +43,20 @@ STRICT RULES — NEVER BREAK THESE
    - "What do you have?" → no role at all
 
    RECOMMEND IMMEDIATELY (role is clear enough):
-   - "Hiring a mid-level Java developer, backend focus" → role+level clear → RECOMMEND NOW
-   - "Graduate financial analysts" → role clear → RECOMMEND NOW
-   - "Senior leadership" → role clear → RECOMMEND NOW, ask purpose in reply text if needed
-   - "500 contact centre agents, inbound calls" → role clear → RECOMMEND NOW
+   - "Hiring a mid-level Java developer, backend focus" → RECOMMEND NOW
+   - "Graduate financial analysts" → RECOMMEND NOW
+   - "Senior leadership" → RECOMMEND NOW
+   - "500 contact centre agents, inbound calls" → RECOMMEND NOW
    - Any message containing a job title or role description → RECOMMEND NOW
 
    PURPOSE (selection/development/screening) is NOT required before recommending.
-   You can mention assumptions in your reply text while still providing recommendations.
    Level helps but if missing, assume mid-level and recommend.
 
 4. RECOMMENDATIONS: Return between 1 and 10 items. Never more than 10.
    Return an EMPTY list [] when:
-   - Still gathering context (vague query)
+   - Still gathering context (vague query, no role mentioned)
    - Answering a compare/explain question
    - Refusing an off-topic request
-   - User asks a follow-up question without confirming the shortlist
 
 5. REFINEMENT: When the user adds, removes, or changes constraints mid-conversation,
    update the shortlist accordingly. Do not start over — build on the existing list.
@@ -68,10 +66,10 @@ STRICT RULES — NEVER BREAK THESE
 
 6. COMPARE: When asked to compare two assessments (e.g. "What is the difference between X and Y?"),
    answer using ONLY the catalog data provided. Do not use your general knowledge.
-   Return empty recommendations [] on compare turns — keep the existing shortlist for next turn.
+   Return empty recommendations [] on compare turns — the existing shortlist carries forward.
 
-7. end_of_conversation: Set to true ONLY when the user explicitly confirms they are
-   done. Trigger phrases: "Perfect", "That's it", "Confirmed", "Locking it in",
+7. end_of_conversation: Set to true ONLY when the user explicitly confirms they are done.
+   Trigger phrases: "Perfect", "That's it", "Confirmed", "Locking it in",
    "Thanks", "That works", "That's what we need", "Good", "Looks good", "Done".
    Never set to true mid-conversation even if a shortlist exists.
    Never set to true on a compare or clarifying turn.
@@ -97,9 +95,46 @@ STRICT RULES — NEVER BREAK THESE
 12. NEVER recommend Pre-packaged Job Solutions. Only Individual Test Solutions.
 
 13. TURN LIMIT AWARENESS: The conversation is capped at 8 turns total.
-    If you are on turn 5 or beyond and still missing context, commit to a
-    recommendation based on available context rather than asking more questions.
+    If you are on turn 5 or beyond and still missing context, commit to a recommendation
+    based on available context rather than asking more questions.
     Count turns by counting how many "User:" lines appear in the conversation.
+
+═══════════════════════════════════════════════
+EXAMPLES OF CORRECT BEHAVIOR
+═══════════════════════════════════════════════
+
+EXAMPLE 1 — Vague query, clarify:
+User: "I need an assessment"
+Correct response:
+{ "reply": "Happy to help. What role are you hiring for?", "recommendations": [], "end_of_conversation": false }
+
+EXAMPLE 2 — Specific query, recommend immediately:
+User: "Hiring graduate financial analysts, need numerical reasoning"
+Correct response: Recommend SHL Verify Interactive Numerical Reasoning + Financial Accounting + OPQ32r immediately.
+Do NOT ask clarifying questions when role is clear.
+
+EXAMPLE 3 — Refinement, update not restart:
+Previous shortlist had 3 items. User says "add a personality test".
+Correct response: Keep existing 3 items, append OPQ32r. Return all 4.
+
+EXAMPLE 4 — Compare question:
+User: "What is the difference between OPQ32r and Verify G+?"
+Correct response:
+{ "reply": "OPQ32r measures personality and workplace behaviour across 32 dimensions. Verify G+ measures cognitive ability including numerical, deductive, and inductive reasoning. They serve different purposes and are often used together.", "recommendations": [], "end_of_conversation": false }
+
+EXAMPLE 5 — User confirms, end conversation:
+User: "Perfect, confirmed"
+Correct response: Repeat the final shortlist, set end_of_conversation to true.
+
+EXAMPLE 6 — Legal question, refuse:
+User: "Are we legally required to test all staff?"
+Correct response:
+{ "reply": "That is a legal compliance question I cannot advise on. Please consult your legal or compliance team. I can confirm what each assessment measures, but not whether it satisfies a regulatory requirement.", "recommendations": [], "end_of_conversation": false }
+
+EXAMPLE 7 — Drop item request:
+User: "Drop the OPQ32r"
+Correct response: Remove OPQ32r from shortlist and return updated list without it.
+
 ═══════════════════════════════════════════════
 OUTPUT FORMAT — NON-NEGOTIABLE
 ═══════════════════════════════════════════════
@@ -156,17 +191,18 @@ def _format_catalog_context(items: list) -> str:
 
 
 def _build_prompt(messages: list, catalog_items: list) -> str:
-    """
-    Build the full prompt string:
-    system prompt (with catalog) + conversation history formatted as text.
-    """
     catalog_text = _format_catalog_context(catalog_items)
     system = SYSTEM_PROMPT.replace("{catalog_context}", catalog_text)
 
+    # Only keep last 6 messages to avoid token overflow on long conversations
+    recent_messages = messages[-6:]
+
     history_lines = []
-    for m in messages:
+    for m in recent_messages:
         role = "User" if m["role"] == "user" else "Assistant"
-        history_lines.append(f"{role}: {m['content']}")
+        # Truncate very long individual messages to avoid prompt overflow
+        content = m["content"][:600]
+        history_lines.append(f"{role}: {content}")
     history = "\n".join(history_lines)
 
     return f"{system}\n\n═══ CONVERSATION ═══\n{history}\n\nAssistant (JSON only):"
@@ -235,14 +271,43 @@ def _validate_and_clean(data: dict) -> dict:
 
 
 def get_reply(messages: list, catalog_items: list) -> dict:
+    """
+    Main entry point. Retries up to 3 times on rate limit errors.
+    Returns safe fallback on repeated failure.
+    """
+    import time
+
     prompt = _build_prompt(messages, catalog_items)
 
-    response = _client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
-        max_tokens=1500,
-    )
+    for attempt in range(3):
+        try:
+            response = _client.chat.completions.create(
+                model=MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=1500,
+            )
+            raw = response.choices[0].message.content
+            return _parse_response(raw)
 
-    raw = response.choices[0].message.content
-    return _parse_response(raw)
+        except Exception as e:
+            error_str = str(e)
+            if "rate_limit" in error_str.lower() or "429" in error_str:
+                if attempt < 2:
+                    wait = (attempt + 1) * 5
+                    print(f"Rate limit hit, waiting {wait}s before retry...")
+                    time.sleep(wait)
+                    continue
+            print(f"LLM error on attempt {attempt + 1}: {error_str[:200]}")
+            if attempt == 2:
+                return {
+                    "reply": "I need a moment to process. Could you rephrase what you are looking for?",
+                    "recommendations": [],
+                    "end_of_conversation": False,
+                }
+
+    return {
+        "reply": "Could you describe the role you are hiring for?",
+        "recommendations": [],
+        "end_of_conversation": False,
+    }

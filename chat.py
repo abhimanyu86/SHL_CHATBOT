@@ -84,5 +84,5 @@ while True:
             history.pop()
         break
     except Exception as e:
-        print(f"❌ Unexpected error: {e}")
+        print(f"❌ Error: {e}")
         break
